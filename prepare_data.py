@@ -1,16 +1,8 @@
 """
-Step 2: Prepare data for MoE training.
-
 1. Downloads TinyStories (or loads a local text file if --local_file is given).
 2. Trains a BPE tokenizer from scratch (small vocab, appropriate for a small model).
 3. Tokenizes the corpus and writes it out as a flat uint16 binary file for
    fast memory-mapped loading during training.
-
-Usage:
-    python prepare_data.py --vocab_size 8192 --out_dir data
-
-If you want to use your own text instead of TinyStories:
-    python prepare_data.py --local_file my_corpus.txt --vocab_size 8192
 """
 import argparse
 import os

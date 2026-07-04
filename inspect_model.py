@@ -1,22 +1,3 @@
-"""
-Teaching tool: run one prompt through a trained checkpoint and generate a
-single self-contained HTML file that visualizes, per layer:
-
-  - Attention weights (heatmap, selectable head)
-  - Router decisions (which expert each token was routed to, top-1 and top-2)
-  - Expert utilization (how many tokens in this prompt went to each expert)
-
-Designed to be opened directly in a browser -- no server needed, all data
-is embedded inline as JSON.
-
-Usage:
-    python inspect_model.py \
-        --checkpoint checkpoints/final.safetensors \
-        --config checkpoints/config.json \
-        --tokenizer data/tokenizer.json \
-        --prompt "Once upon a time there was a" \
-        --out inspection.html
-"""
 import argparse
 import json
 

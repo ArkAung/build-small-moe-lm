@@ -1,12 +1,5 @@
 """
-Step 3: A small Mixture-of-Experts decoder-only transformer in MLX.
-
-Design choices (deliberately simple, for learning purposes):
-- Pre-norm transformer blocks, RMSNorm, RoPE positional embeddings, SwiGLU experts.
-- Top-k token routing (k=2 by default) over N experts.
-- Switch-Transformer-style load-balancing auxiliary loss to prevent expert collapse.
-- No expert capacity dropping (simplest correct version) -- fine at this scale.
-  Add capacity-based dropping later if you want to study that failure mode.
+A small Mixture-of-Experts decoder-only transformer in MLX.
 """
 import math
 from dataclasses import dataclass

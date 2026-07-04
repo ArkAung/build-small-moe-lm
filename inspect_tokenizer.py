@@ -1,17 +1,3 @@
-"""
-Teaching tool: visualize what a trained BPE tokenizer actually learned and
-produced. Generates a single self-contained HTML file with:
-
-  - Vocab / merge count stats and a byte-length histogram of the vocab
-  - A browsable view of the learned merges in rank order (early -> late),
-    showing the progression from byte pairs to whole words
-  - A live tokenizer playground: type any text and see it segmented using
-    the REAL learned merges, re-implemented directly in JS (not a stand-in
-    approximation) so what you see matches what prepare_data.py produced.
-
-Usage:
-    python inspect_tokenizer.py --tokenizer data/tokenizer.json --out tokenizer_inspection.html
-"""
 import argparse
 import json
 

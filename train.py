@@ -1,8 +1,5 @@
 """
-Step 4: Train the MoE transformer.
-
-Usage:
-    python train.py --data_dir data --out_dir checkpoints --steps 5000
+MoE transformer trainer
 """
 import argparse
 import json

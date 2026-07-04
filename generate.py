@@ -1,13 +1,5 @@
 """
-Step 5: Generate text from a trained checkpoint, and optionally inspect
-expert routing statistics (which experts fire on which tokens) -- this is
-the fun part for actually seeing what your MoE learned.
-
-Usage:
-    python generate.py --checkpoint checkpoints/final.safetensors \
-                        --config checkpoints/config.json \
-                        --tokenizer data/tokenizer.json \
-                        --prompt "Once upon a time" --max_tokens 200
+Generate text from a trained checkpoint
 """
 import argparse
 import json
