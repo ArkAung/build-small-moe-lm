@@ -1,0 +1,13 @@
+[project]
+name = "build-small-moe-lm"
+version = "0.1.0"
+description = "Small MoE language model trained from scratch with MLX"
+requires-python = ">=3.10"
+dependencies = [
+    "mlx>=0.18.0",
+    "mlx-lm>=0.19.0",
+    "numpy",
+    "tokenizers>=0.20.0",
+    "datasets>=2.20.0",
+    "tqdm",
+]
