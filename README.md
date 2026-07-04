@@ -123,15 +123,11 @@ for a single inspection prompt but should never be used during training.
 out the unselected contributions (see comments in the file). This is the
 easiest way to get correct routing/gradients working in MLX without
 wrestling with gather/scatter edge cases, but it means you aren't actually
-getting the compute savings that make MoE attractive in production — you're
-paying dense-model FLOPs for MoE-model quality/capacity.
+getting the compute savings that make MoE attractive in production.
 
 **Good next exercise once this trains correctly:** convert the MoE layer to
-real sparse dispatch — sort tokens by assigned expert, gather them into
-per-expert batches, run each expert only on its assigned tokens, then
-scatter results back. This is genuinely the most instructive part of
-building an MoE and worth doing by hand once you've seen the dense version
-work end to end.
+real sparse dispatch. Sort tokens by assigned expert, gather them into
+per-expert batches, run each expert only on its assigned tokens.
 
 ## Other extensions worth trying
 
