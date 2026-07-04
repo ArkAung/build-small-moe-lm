@@ -2,15 +2,14 @@
 Generate text from a trained checkpoint
 """
 import argparse
-import json
 
 import mlx.core as mx
-from tokenizers import Tokenizer
 
-from model import MoETransformer, ModelConfig
+from common import load_model_and_tokenizer
 
 
 def sample_top_p(logits, temperature=0.8, top_p=0.9):
+    """Nucleus (top-p) sampling from a single row of logits."""
     logits = logits / temperature
     probs = mx.softmax(logits, axis=-1)
     sorted_idx = mx.argsort(-probs, axis=-1)
@@ -28,6 +27,7 @@ def sample_top_p(logits, temperature=0.8, top_p=0.9):
 
 
 def main():
+    """Parse args, load a checkpoint, and stream sampled text to stdout."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--checkpoint", type=str, required=True)
     parser.add_argument("--config", type=str, required=True)
@@ -38,15 +38,8 @@ def main():
     parser.add_argument("--top_p", type=float, default=0.9)
     args = parser.parse_args()
 
-    with open(args.config) as f:
-        cfg_dict = json.load(f)
-    cfg = ModelConfig(**cfg_dict)
+    model, _cfg, tok = load_model_and_tokenizer(args.checkpoint, args.config, args.tokenizer)
 
-    model = MoETransformer(cfg)
-    model.load_weights(args.checkpoint)
-    model.eval()
-
-    tok = Tokenizer.from_file(args.tokenizer)
     bos_id = tok.token_to_id("<bos>")
     eos_id = tok.token_to_id("<eos>")
 

@@ -1,5 +1,5 @@
 """
-MoE transformer trainer
+Train the MoE transformer.
 """
 import argparse
 import json
@@ -8,8 +8,9 @@ import time
 
 import numpy as np
 import mlx.core as mx
-import mlx.nn as nn
+from mlx import nn
 import mlx.optimizers as optim
+from tokenizers import Tokenizer
 
 from model import MoETransformer, ModelConfig
 
@@ -21,6 +22,7 @@ class BinDataset:
         self.seq_len = seq_len
 
     def get_batch(self, batch_size):
+        """Sample `batch_size` random (input, target) chunks of length seq_len."""
         max_start = len(self.data) - self.seq_len - 1
         starts = np.random.randint(0, max_start, size=batch_size)
         x = np.stack([self.data[s : s + self.seq_len] for s in starts]).astype(np.int32)
@@ -29,23 +31,26 @@ class BinDataset:
 
 
 def loss_fn(model, x, y, aux_coef):
+    """Combined next-token cross-entropy + load-balancing aux loss."""
     logits, aux_loss, _, _ = model(x)
     ce = nn.losses.cross_entropy(logits, y, reduction="mean")
     total = ce + aux_coef * aux_loss
     return total, (ce, aux_loss)
 
 
-def evaluate(model, val_ds, seq_len, batch_size, n_batches=20):
+def evaluate(model, val_ds, batch_size, n_batches=20):
+    """Average cross-entropy over a few random validation batches."""
     losses = []
     for _ in range(n_batches):
         x, y = val_ds.get_batch(batch_size)
-        logits, aux_loss, _, _ = model(x)
+        logits, _, _, _ = model(x)
         ce = nn.losses.cross_entropy(logits, y, reduction="mean")
         losses.append(ce.item())
     return float(np.mean(losses))
 
 
 def main():
+    """Parse args, build the model + data, and run the training loop."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default="data")
     parser.add_argument("--out_dir", type=str, default="checkpoints")
@@ -71,7 +76,6 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
 
     # figure out vocab size from the tokenizer we trained in step 2
-    from tokenizers import Tokenizer
     tok = Tokenizer.from_file(os.path.join(args.data_dir, "tokenizer.json"))
     vocab_size = tok.get_vocab_size()
 
@@ -86,17 +90,21 @@ def main():
         top_k=args.top_k,
         aux_loss_coef=args.aux_loss_coef,
     )
-    with open(os.path.join(args.out_dir, "config.json"), "w") as f:
+    with open(os.path.join(args.out_dir, "config.json"), "w", encoding="utf-8") as f:
         json.dump(cfg.__dict__, f, indent=2)
 
     model = MoETransformer(cfg)
     mx.eval(model.parameters())
-    print(f"Model initialized: {model.num_params() / 1e6:.1f}M total params, vocab_size={vocab_size}")
+    print(
+        f"Model initialized: {model.num_params() / 1e6:.1f}M total params, "
+        f"vocab_size={vocab_size}"
+    )
 
     train_ds = BinDataset(os.path.join(args.data_dir, "train.bin"), args.seq_len)
     val_ds = BinDataset(os.path.join(args.data_dir, "val.bin"), args.seq_len)
 
     def lr_schedule(step):
+        """Linear warmup then cosine decay to 10% of the peak learning rate."""
         if step < args.warmup_steps:
             return args.lr * (step + 1) / args.warmup_steps
         # simple cosine decay to 10% of peak lr
@@ -114,7 +122,7 @@ def main():
         optimizer.learning_rate = lr_schedule(step)
 
         x, y = train_ds.get_batch(args.batch_size)
-        (loss, (ce, aux_loss)), grads = loss_and_grad_fn(model, x, y, args.aux_loss_coef)
+        (_, (ce, aux_loss)), grads = loss_and_grad_fn(model, x, y, args.aux_loss_coef)
 
         # gradient clipping by global norm
         grads, _ = optim.clip_grad_norm(grads, args.grad_clip)
@@ -127,7 +135,10 @@ def main():
 
         if step % args.log_every == 0:
             elapsed = time.time() - start_time
-            tok_per_sec = (args.batch_size * args.seq_len * args.log_every) / elapsed if step > args.log_every else 0
+            if step > args.log_every:
+                tok_per_sec = (args.batch_size * args.seq_len * args.log_every) / elapsed
+            else:
+                tok_per_sec = 0
             print(f"step {step:6d} | lr {optimizer.learning_rate.item():.2e} | "
                   f"ce {np.mean(running_ce):.4f} | ppl {np.exp(np.mean(running_ce)):.2f} | "
                   f"aux {np.mean(running_aux):.4f} | {tok_per_sec:.0f} tok/s")
@@ -135,7 +146,7 @@ def main():
             start_time = time.time()
 
         if step % args.eval_every == 0:
-            val_ce = evaluate(model, val_ds, args.seq_len, args.batch_size)
+            val_ce = evaluate(model, val_ds, args.batch_size)
             print(f"  [eval] step {step} | val_ce {val_ce:.4f} | val_ppl {np.exp(val_ce):.2f}")
 
         if step % args.save_every == 0:

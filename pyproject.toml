@@ -14,5 +14,30 @@ dependencies = [
 
 [dependency-groups]
 dev = [
-    "pylint>=4.0.6",
+    "pylint>=3.2.0",
 ]
+
+[tool.pylint.main]
+extension-pkg-allow-list = ["mlx"]
+
+[tool.pylint."messages control"]
+disable = [
+    "missing-module-docstring",   # each script already has a usage docstring up top
+    "too-few-public-methods",     # nn.Module subclasses routinely have just __init__/__call__
+    "too-many-instance-attributes",  # model config / layer classes naturally hold many hyperparams
+]
+
+[tool.pylint.format]
+max-line-length = 110
+
+[tool.pylint.design]
+max-locals = 30
+max-statements = 70
+max-args = 8
+
+[tool.pylint.basic]
+good-names = ["B", "T", "D", "N", "i", "j", "k", "e", "f", "ex", "_"]
+
+[tool.pylint."similarities"]
+min-similarity-lines = 12
+ignore-imports = true

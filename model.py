@@ -1,15 +1,15 @@
 """
 A small Mixture-of-Experts decoder-only transformer in MLX.
 """
-import math
 from dataclasses import dataclass
 
 import mlx.core as mx
-import mlx.nn as nn
+from mlx import nn
 
 
 @dataclass
 class ModelConfig:
+    """Hyperparameters for the MoE transformer."""
     vocab_size: int = 8192
     d_model: int = 512
     n_layers: int = 8
@@ -18,13 +18,15 @@ class ModelConfig:
     max_seq_len: int = 1024
     n_experts: int = 8
     top_k: int = 2
-    expert_hidden_mult: float = 3.0   # expert FFN hidden dim = d_model * mult (SwiGLU trims this internally)
+    # expert FFN hidden dim = d_model * mult (SwiGLU trims this internally)
+    expert_hidden_mult: float = 3.0
     aux_loss_coef: float = 0.01
     rope_theta: float = 10000.0
     norm_eps: float = 1e-5
 
 
 class RMSNorm(nn.Module):
+    """RMS layer normalization."""
     def __init__(self, dim, eps=1e-5):
         super().__init__()
         self.weight = mx.ones((dim,))
@@ -35,6 +37,7 @@ class RMSNorm(nn.Module):
 
 
 class Attention(nn.Module):
+    """Multi-head self-attention with RoPE and optional KV cache."""
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.n_heads = cfg.n_heads
@@ -117,9 +120,9 @@ class MoELayer(nn.Module):
         self.experts = [Expert(cfg.d_model, hidden_dim) for _ in range(cfg.n_experts)]
 
     def __call__(self, x, capture=None):
+        """Route each token to its top-k experts and combine their outputs."""
         B, T, D = x.shape
         x_flat = x.reshape(-1, D)                       # (N, D), N = B*T
-        N = x_flat.shape[0]
 
         router_logits = self.gate(x_flat)                # (N, n_experts)
         router_probs = mx.softmax(router_logits, axis=-1)
@@ -137,9 +140,11 @@ class MoELayer(nn.Module):
         # Swap in a sparse-dispatch version once this is working end to end.
         out = mx.zeros_like(x_flat)
         for e in range(self.n_experts):
-            expert_mask = (topk_idx == e).astype(x.dtype)            # (N, top_k), 1 where this token routes to expert e
+            # (N, top_k), 1 where this token routes to expert e
+            expert_mask = (topk_idx == e).astype(x.dtype)
             weight = mx.sum(topk_probs * expert_mask, axis=-1, keepdims=True)  # (N, 1)
-            # skip compute is not free in MLX's graph mode, but weight=0 zeroes contribution correctly
+            # skipping compute isn't free in MLX's graph mode, but weight=0
+            # zeroes out the unused contribution correctly
             expert_out = self.experts[e](x_flat)                     # (N, D)
             out = out + expert_out * weight
 
@@ -152,8 +157,8 @@ class MoELayer(nn.Module):
         expert_range = mx.arange(self.n_experts).reshape(1, -1)
         one_hot_top1 = (top1_idx.reshape(-1, 1) == expert_range).astype(mx.float32)
 
-        tokens_per_expert = mx.mean(one_hot_top1, axis=0)             # (n_experts,) fraction routed
-        prob_per_expert = mx.mean(router_probs, axis=0)                # (n_experts,) average router prob
+        tokens_per_expert = mx.mean(one_hot_top1, axis=0)   # (n_experts,) fraction routed
+        prob_per_expert = mx.mean(router_probs, axis=0)     # (n_experts,) average router prob
         aux_loss = self.n_experts * mx.sum(tokens_per_expert * prob_per_expert)
 
         if capture is not None:
@@ -165,6 +170,7 @@ class MoELayer(nn.Module):
 
 
 class Block(nn.Module):
+    """One transformer block: self-attention followed by a routed MoE FFN."""
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.attn_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
@@ -173,6 +179,8 @@ class Block(nn.Module):
         self.moe = MoELayer(cfg)
 
     def __call__(self, x, mask=None, cache=None, capture=None):
+        """Run attention + MoE with residual connections, returning updated
+        hidden state, this block's aux loss, and the new KV cache entry."""
         attn_capture = {} if capture is not None else None
         h, new_cache = self.attn(self.attn_norm(x), mask=mask, cache=cache, capture=attn_capture)
         x = x + h
@@ -189,6 +197,7 @@ class Block(nn.Module):
 
 
 class MoETransformer(nn.Module):
+    """Decoder-only transformer whose FFN sublayers are routed MoE layers."""
     def __init__(self, cfg: ModelConfig):
         super().__init__()
         self.cfg = cfg
@@ -217,7 +226,9 @@ class MoETransformer(nn.Module):
         for i, block in enumerate(self.blocks):
             block_cache = cache[i] if cache is not None else None
             block_capture = {} if capture else None
-            x, aux_loss, block_new_cache = block(x, mask=mask, cache=block_cache, capture=block_capture)
+            x, aux_loss, block_new_cache = block(
+                x, mask=mask, cache=block_cache, capture=block_capture
+            )
             total_aux_loss = total_aux_loss + aux_loss
             new_caches.append(block_new_cache)
             if capture:
@@ -229,8 +240,11 @@ class MoETransformer(nn.Module):
         return logits, avg_aux_loss, new_caches, captures
 
     def num_params(self):
+        """Total parameter count across all submodules."""
         leaves = self.parameters()
+
         def count(d):
+            """Recursively sum .size over a nested dict/list of arrays."""
             total = 0
             if isinstance(d, dict):
                 for v in d.values():

@@ -1,4 +1,6 @@
 """
+Prepare data for MoE training.
+
 1. Downloads TinyStories (or loads a local text file if --local_file is given).
 2. Trains a BPE tokenizer from scratch (small vocab, appropriate for a small model).
 3. Tokenizes the corpus and writes it out as a flat uint16 binary file for
@@ -12,6 +14,7 @@ from tqdm import tqdm
 
 
 def get_text_iterator(local_file=None, max_examples=None):
+    """Yield one document at a time, either from a local file or TinyStories."""
     if local_file:
         with open(local_file, "r", encoding="utf-8") as f:
             for line in f:
@@ -19,7 +22,9 @@ def get_text_iterator(local_file=None, max_examples=None):
                 if line:
                     yield line
     else:
-        from datasets import load_dataset
+        # Lazy import: `datasets` is a heavy optional dependency only needed
+        # when downloading TinyStories, not when using --local_file.
+        from datasets import load_dataset  # pylint: disable=import-outside-toplevel
         ds = load_dataset("roneneldan/TinyStories", split="train")
         if max_examples:
             ds = ds.select(range(max_examples))
@@ -30,6 +35,7 @@ def get_text_iterator(local_file=None, max_examples=None):
 
 
 def train_tokenizer(text_iter_fn, vocab_size, out_dir):
+    """Train a byte-level BPE tokenizer from scratch and save it to out_dir."""
     tokenizer = Tokenizer(models.BPE(unk_token="<unk>"))
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
     tokenizer.decoder = decoders.ByteLevel()
@@ -49,7 +55,8 @@ def train_tokenizer(text_iter_fn, vocab_size, out_dir):
     return tokenizer
 
 
-def tokenize_corpus(tokenizer, text_iter_fn, out_dir, split_name="train", val_fraction=0.01):
+def tokenize_corpus(tokenizer, text_iter_fn, out_dir, val_fraction=0.01):
+    """Tokenize every document, then write a train/val split of uint16 ids to disk."""
     bos_id = tokenizer.token_to_id("<bos>")
     eos_id = tokenizer.token_to_id("<eos>")
 
@@ -77,6 +84,7 @@ def tokenize_corpus(tokenizer, text_iter_fn, out_dir, split_name="train", val_fr
 
 
 def main():
+    """Parse args, train the tokenizer, and tokenize the corpus into .bin shards."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--vocab_size", type=int, default=8192)
     parser.add_argument("--out_dir", type=str, default="data")
@@ -89,7 +97,8 @@ def main():
 
     os.makedirs(args.out_dir, exist_ok=True)
 
-    text_iter_fn = lambda: get_text_iterator(args.local_file, args.max_examples)
+    def text_iter_fn():
+        return get_text_iterator(args.local_file, args.max_examples)
 
     tokenizer = train_tokenizer(text_iter_fn, args.vocab_size, args.out_dir)
     tokenize_corpus(tokenizer, text_iter_fn, args.out_dir)
