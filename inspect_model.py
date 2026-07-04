@@ -1,3 +1,7 @@
+"""
+Run one prompt through a trained checkpoint and generate a
+single self-contained HTML file that visualizes, per layer
+"""
 import argparse
 import json
 
@@ -116,9 +120,13 @@ HTML_TEMPLATE = """<!DOCTYPE html>
   .subtitle { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
   .prompt-box {
     background: var(--panel); border: 1px solid var(--border);
-    border-radius: 8px; padding: 12px 16px; margin-bottom: 20px;
+    border-radius: 8px; padding: 12px 16px; margin-bottom: 16px;
     font-size: 14px;
   }
+  .intro-panel { font-size: 13px; line-height: 1.6; margin-bottom: 20px; }
+  .intro-panel ul { margin: 8px 0 0 18px; padding: 0; }
+  .intro-panel li { margin-bottom: 6px; }
+  .layer-note { font-size: 12px; color: var(--muted); margin-bottom: 10px; }
   .layer-tabs { display: flex; gap: 6px; margin-bottom: 20px; flex-wrap: wrap; }
   .layer-tab {
     padding: 6px 14px; border-radius: 6px; border: 1px solid var(--border);
@@ -136,15 +144,33 @@ HTML_TEMPLATE = """<!DOCTYPE html>
     background: #0f1115; color: var(--text); border: 1px solid var(--border);
     border-radius: 4px; padding: 4px 8px; font-size: 13px;
   }
-  #heatmap { display: grid; gap: 2px; }
-  .heat-cell { aspect-ratio: 1; border-radius: 2px; position: relative; }
+  #heatmap { overflow-x: auto; }
+  .heat-table { border-collapse: collapse; }
+  .heat-table th, .heat-table td { padding: 0; }
+  .heat-col-label {
+    writing-mode: vertical-rl; transform: rotate(180deg);
+    font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace;
+    cursor: pointer; padding: 2px 3px; max-height: 90px;
+  }
+  .heat-row-label {
+    font-size: 10px; color: var(--muted); font-family: ui-monospace, monospace;
+    cursor: pointer; padding: 0 6px; text-align: right; white-space: nowrap;
+  }
+  .heat-col-label.selected-label, .heat-row-label.selected-label { color: var(--text); font-weight: 700; }
+  .heat-cell-td { cursor: pointer; }
+  .heat-cell { width: 18px; height: 18px; border-radius: 2px; }
+  .heat-cell.on-selected { outline: 1px solid rgba(255,255,255,0.35); outline-offset: -1px; }
+  .legend-row { display: flex; flex-wrap: wrap; gap: 10px 14px; margin-bottom: 14px; }
+  .legend-item { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .legend-swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; flex-shrink: 0; }
   .token-row { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 16px; }
   .token-chip {
-    padding: 4px 8px; border-radius: 5px; font-size: 12px;
-    font-family: ui-monospace, monospace; cursor: default;
+    padding: 4px 8px; border-radius: 5px; font-size: 12px; color: var(--text);
+    font-family: ui-monospace, monospace; cursor: pointer;
     border: 1px solid transparent;
   }
-  .token-chip:hover { border-color: var(--accent); }
+  .token-chip:hover { border-color: var(--text); }
+  .token-chip.selected { outline: 2px solid var(--text); outline-offset: 1px; }
   .util-bars { display: flex; align-items: flex-end; gap: 8px; height: 120px; margin-top: 8px; }
   .util-bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
   .util-bar { width: 100%; background: var(--accent); border-radius: 3px 3px 0 0; min-height: 2px; }
@@ -165,7 +191,19 @@ HTML_TEMPLATE = """<!DOCTYPE html>
 
 <div class="prompt-box" id="promptBox"></div>
 
+<div class="panel intro-panel">
+  <h2>How to read this</h2>
+  <ul>
+    <li><b>Attention heatmap:</b> each row is the token currently being computed (the "query"); each column is a token it's looking back at (the "key"). Brighter cell = more attention weight. This model is causal (decoder-only), so a token can only attend to itself and earlier tokens -- the upper-right triangle is always exactly zero. Click a token label (row or column) to highlight it.</li>
+    <li><b>Router decisions:</b> each chip is split into colored segments showing its top-2 expert assignment -- the width of each segment is that expert's share of the routing weight, so a chip that's almost entirely one color means the router is confident; an even split means it's torn between two experts. Click a chip to highlight that same token in the attention heatmap.</li>
+    <li><b>Expert utilization:</b> how many tokens in this one prompt went to each expert (top-1 choice). Flat bars = balanced routing. One or two tall bars = the router has collapsed onto a handful of favorites.</li>
+  </ul>
+</div>
+
+<div class="layer-note">Layer 0 is closest to the input embeddings; the highest-numbered layer feeds directly into the output prediction.</div>
 <div class="layer-tabs" id="layerTabs"></div>
+
+<div class="legend-row" id="expertLegend"></div>
 
 <div class="grid">
   <div class="panel">
@@ -174,7 +212,6 @@ HTML_TEMPLATE = """<!DOCTYPE html>
       <select id="headSelect"></select>
     </div>
     <div id="heatmap"></div>
-    <div class="legend">Rows = query token, columns = key token. Brighter = more attention weight.</div>
   </div>
 
   <div class="panel">
@@ -193,6 +230,7 @@ const DATA = __DATA_JSON__;
 
 let currentLayer = 0;
 let currentHead = 0;
+let selectedToken = null;
 
 const expertColors = [
   "#5aa9e6", "#e6785a", "#7ce65a", "#e6c15a", "#b05ae6",
@@ -203,10 +241,31 @@ function colorForExpert(idx) {
   return expertColors[idx % expertColors.length];
 }
 
+function toggleSelected(i) {
+  selectedToken = (selectedToken === i ? null : i);
+  renderHeatmap();
+  renderRoutingTokens();
+}
+
 function renderPromptBox() {
   document.getElementById("promptBox").textContent = 'Prompt: "' + DATA.prompt + '"  \u00b7  ' +
     DATA.tokens.length + ' tokens  \u00b7  ' + DATA.n_layers + ' layers  \u00b7  ' +
     DATA.n_experts + ' experts (top-' + DATA.top_k + ' routing)';
+}
+
+function renderLegend() {
+  const container = document.getElementById("expertLegend");
+  container.innerHTML = "";
+  for (let e = 0; e < DATA.n_experts; e++) {
+    const item = document.createElement("div");
+    item.className = "legend-item";
+    const swatch = document.createElement("div");
+    swatch.className = "legend-swatch";
+    swatch.style.background = colorForExpert(e);
+    item.appendChild(swatch);
+    item.appendChild(document.createTextNode("Expert " + e));
+    container.appendChild(item);
+  }
 }
 
 function renderTabs() {
@@ -241,29 +300,58 @@ function renderHeatmap() {
   const T = weights.length;
   const container = document.getElementById("heatmap");
   container.innerHTML = "";
-  container.style.gridTemplateColumns = "repeat(" + T + ", 1fr)";
-
   const tooltip = document.getElementById("tooltip");
 
+  const table = document.createElement("table");
+  table.className = "heat-table";
+
+  const headRow = document.createElement("tr");
+  headRow.appendChild(document.createElement("th"));
+  for (let j = 0; j < T; j++) {
+    const th = document.createElement("th");
+    const label = document.createElement("div");
+    label.className = "heat-col-label" + (selectedToken === j ? " selected-label" : "");
+    label.textContent = DATA.tokens[j];
+    label.title = DATA.tokens[j];
+    label.onclick = () => toggleSelected(j);
+    th.appendChild(label);
+    headRow.appendChild(th);
+  }
+  table.appendChild(headRow);
+
   for (let i = 0; i < T; i++) {
+    const row = document.createElement("tr");
+    const th = document.createElement("th");
+    const rlabel = document.createElement("div");
+    rlabel.className = "heat-row-label" + (selectedToken === i ? " selected-label" : "");
+    rlabel.textContent = DATA.tokens[i];
+    rlabel.title = DATA.tokens[i];
+    rlabel.onclick = () => toggleSelected(i);
+    th.appendChild(rlabel);
+    row.appendChild(th);
+
     for (let j = 0; j < T; j++) {
       const v = weights[i][j];
+      const td = document.createElement("td");
+      td.className = "heat-cell-td";
       const cell = document.createElement("div");
-      cell.className = "heat-cell";
-      cell.style.gridColumn = j + 1;
-      cell.style.gridRow = i + 1;
+      cell.className = "heat-cell" + (selectedToken !== null && (i === selectedToken || j === selectedToken) ? " on-selected" : "");
       const alpha = Math.min(1, v * 3);
       cell.style.background = "rgba(90, 169, 230, " + alpha.toFixed(3) + ")";
-      cell.onmouseenter = (e) => {
+      td.appendChild(cell);
+      td.onmouseenter = (e) => {
         tooltip.style.display = "block";
         tooltip.textContent = DATA.tokens[i] + " -> " + DATA.tokens[j] + ": " + v.toFixed(4);
         tooltip.style.left = (e.clientX + 12) + "px";
         tooltip.style.top = (e.clientY + 12) + "px";
       };
-      cell.onmouseleave = () => { tooltip.style.display = "none"; };
-      container.appendChild(cell);
+      td.onmouseleave = () => { tooltip.style.display = "none"; };
+      row.appendChild(td);
     }
+    table.appendChild(row);
   }
+
+  container.appendChild(table);
 }
 
 function renderRoutingTokens() {
@@ -273,18 +361,28 @@ function renderRoutingTokens() {
   const tooltip = document.getElementById("tooltip");
 
   DATA.tokens.forEach((tok, i) => {
-    const top1 = layer.topk_idx[i][0];
+    const idx = layer.topk_idx[i];
+    const probs = layer.topk_probs[i];
     const chip = document.createElement("div");
-    chip.className = "token-chip";
+    chip.className = "token-chip" + (selectedToken === i ? " selected" : "");
     chip.textContent = tok;
-    chip.style.background = colorForExpert(top1) + "33";
-    chip.style.color = colorForExpert(top1);
-    chip.style.borderColor = colorForExpert(top1);
+
+    const c1 = colorForExpert(idx[0]);
+    if (idx.length >= 2) {
+      const c2 = colorForExpert(idx[1]);
+      const p1pct = (probs[0] * 100).toFixed(1);
+      chip.style.background = "linear-gradient(to right, " + c1 + "77 0%, " + c1 + "77 " + p1pct + "%, " + c2 + "77 " + p1pct + "%, " + c2 + "77 100%)";
+    } else {
+      chip.style.background = c1 + "55";
+    }
+    chip.style.borderColor = c1;
+
+    chip.onclick = () => toggleSelected(i);
 
     chip.onmouseenter = (e) => {
       let lines = ["Token: " + tok];
       for (let k = 0; k < DATA.top_k; k++) {
-        lines.push("  expert " + layer.topk_idx[i][k] + ": " + (layer.topk_probs[i][k] * 100).toFixed(1) + "%");
+        lines.push("  expert " + idx[k] + ": " + (probs[k] * 100).toFixed(1) + "%");
       }
       tooltip.style.display = "block";
       tooltip.textContent = lines.join("\\n");
@@ -336,6 +434,7 @@ function renderAll() {
 }
 
 renderPromptBox();
+renderLegend();
 renderAll();
 </script>
 
