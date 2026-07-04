@@ -1,4 +1,4 @@
-# Small MoE LLM from scratch (MLX, Apple Silicon)
+# Small MoE LLM from scratch (on MLX)
 
 A minimal but complete pipeline to train a small Mixture-of-Experts transformer
 from scratch using MLX. Built for learning the mechanics of MoE
