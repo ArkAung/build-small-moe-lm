@@ -4,7 +4,7 @@ A minimal but complete pipeline to train a small Mixture-of-Experts transformer
 from scratch using MLX. Built for learning the mechanics of MoE
 (routing, load balancing, expert specialization).
 
-The main purpose of this repo is to teach out MoE works:
+The main purpose of this repo is to teach how MoE works:
 ![asset](assets/inspector.png)
 
 ## 0. Setup
