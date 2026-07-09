@@ -1,3 +1,13 @@
+"""
+Visualize what a trained BPE tokenizer actually learned and
+produced. Generates a single self-contained HTML file with:
+
+  - Vocab / merge count stats and a byte-length histogram of the vocab
+  - A browsable view of the learned merges in rank order (early -> late),
+    showing the progression from byte pairs to whole words
+  - A live tokenizer playground: type any text and see it segmented using
+    the REAL learned merges, re-implemented directly in JS
+"""
 import argparse
 import json
 
@@ -53,12 +63,13 @@ PRESET_SENTENCES = [
 
 
 def main():
+    """Parse args, read tokenizer.json, and write the HTML view."""
     parser = argparse.ArgumentParser()
     parser.add_argument("--tokenizer", type=str, required=True)
     parser.add_argument("--out", type=str, default="tokenizer_inspection.html")
     args = parser.parse_args()
 
-    with open(args.tokenizer) as f:
+    with open(args.tokenizer, encoding="utf-8") as f:
         raw = json.load(f)
 
     model = raw["model"]
@@ -125,12 +136,15 @@ def main():
     }
 
     html = HTML_TEMPLATE.replace("__DATA_JSON__", json.dumps(data))
-    with open(args.out, "w") as f:
+    with open(args.out, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"Wrote tokenizer inspection view -> {args.out}")
     print(f"Vocab size: {len(vocab)}, merges: {len(merges)}")
 
 
+# The HTML template below is markup/CSS/JS, not Python logic -- line-length
+# and docstring conventions for Python don't meaningfully apply to it.
+# pylint: disable=line-too-long
 HTML_TEMPLATE = """<!DOCTYPE html>
 <html>
 <head>
@@ -486,6 +500,7 @@ if (DATA.preset_examples.length > 0) {
 </body>
 </html>
 """
+# pylint: enable=line-too-long
 
 if __name__ == "__main__":
     main()

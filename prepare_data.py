@@ -25,11 +25,11 @@ def get_text_iterator(local_file=None, max_examples=None):
         # Lazy import: `datasets` is a heavy optional dependency only needed
         # when downloading TinyStories, not when using --local_file.
         from datasets import load_dataset  # pylint: disable=import-outside-toplevel
-        ds = load_dataset("roneneldan/TinyStories", split="train")
+        ds = load_dataset("ysharma/short_jokes", split="train")
         if max_examples:
             ds = ds.select(range(max_examples))
         for row in ds:
-            text = row["text"].strip()
+            text = row["Joke"].strip()
             if text:
                 yield text
 
