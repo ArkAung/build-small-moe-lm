@@ -1,5 +1,6 @@
 """
 A small Mixture-of-Experts decoder-only transformer in MLX.
+
 """
 from dataclasses import dataclass
 
@@ -204,7 +205,12 @@ class MoETransformer(nn.Module):
         self.tok_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
         self.blocks = [Block(cfg) for _ in range(cfg.n_layers)]
         self.final_norm = RMSNorm(cfg.d_model, cfg.norm_eps)
-        self.lm_head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+        # No separate lm_head: the output projection is tied to the input
+        # embedding (see __call__). This must be done as a matmul against
+        # tok_emb.weight directly, not by assigning a second module's
+        # .weight to the same array -- MLX's parameter tree would then treat
+        # them as two independent leaves that silently drift apart after the
+        # first optimizer step, defeating the point of tying them.
 
     def __call__(self, tokens, cache=None, capture=False):
         """
@@ -235,7 +241,9 @@ class MoETransformer(nn.Module):
                 captures.append(block_capture)
 
         x = self.final_norm(x)
-        logits = self.lm_head(x)
+        # Weight-tied output projection: reuse tok_emb.weight (vocab_size,
+        # d_model) as the LM head instead of a separate learned matrix.
+        logits = x @ self.tok_emb.weight.T
         avg_aux_loss = total_aux_loss / len(self.blocks)
         return logits, avg_aux_loss, new_caches, captures
 
