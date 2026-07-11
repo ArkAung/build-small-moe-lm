@@ -1,5 +1,8 @@
 """
-Train the MoE transformer.
+Step 4: Train the MoE transformer.
+
+Usage:
+    python train.py --data_dir data --out_dir checkpoints --steps 5000
 """
 import argparse
 import json
@@ -13,6 +16,8 @@ import mlx.optimizers as optim
 from tokenizers import Tokenizer
 
 from model import MoETransformer, ModelConfig
+from dashboard_assets import write_run_meta, write_dashboard, append_log
+from common import compute_layer_utilization
 
 
 class BinDataset:
@@ -71,6 +76,13 @@ def main():
     parser.add_argument("--n_experts", type=int, default=8)
     parser.add_argument("--top_k", type=int, default=2)
     parser.add_argument("--aux_loss_coef", type=float, default=0.01)
+    parser.add_argument("--diag_prompt", type=str, default="Tell me a joke.",
+                         help="Fixed short prompt used to snapshot per-layer expert "
+                              "utilization for the dashboard's scrubber. Keep this short "
+                              "-- it's run every --diag_every steps during training.")
+    parser.add_argument("--diag_every", type=int, default=None,
+                         help="How often to log an expert-utilization snapshot. "
+                              "Defaults to --eval_every if not set.")
     args = parser.parse_args()
 
     os.makedirs(args.out_dir, exist_ok=True)
@@ -95,10 +107,22 @@ def main():
 
     model = MoETransformer(cfg)
     mx.eval(model.parameters())
+    total_params = model.num_params()
     print(
-        f"Model initialized: {model.num_params() / 1e6:.1f}M total params, "
+        f"Model initialized: {total_params / 1e6:.1f}M total params, "
         f"vocab_size={vocab_size}"
     )
+
+    diag_every = args.diag_every if args.diag_every is not None else args.eval_every
+    diag_bos_id = tok.token_to_id("<bos>")
+    diag_ids = [diag_bos_id] + tok.encode(args.diag_prompt).ids
+    diag_tokens = mx.array([diag_ids])
+
+    write_run_meta(args.out_dir, cfg, vars(args), total_params)
+    write_dashboard(args.out_dir)
+    print(f"Dashboard written to {args.out_dir}/dashboard.html")
+    print(f"  To view it live: cd {args.out_dir} && python -m http.server 8000")
+    print("  Then open http://localhost:8000/dashboard.html in a browser.")
 
     train_ds = BinDataset(os.path.join(args.data_dir, "train.bin"), args.seq_len)
     val_ds = BinDataset(os.path.join(args.data_dir, "val.bin"), args.seq_len)
@@ -139,15 +163,36 @@ def main():
                 tok_per_sec = (args.batch_size * args.seq_len * args.log_every) / elapsed
             else:
                 tok_per_sec = 0
+            mean_ce = float(np.mean(running_ce))
+            mean_aux = float(np.mean(running_aux))
             print(f"step {step:6d} | lr {optimizer.learning_rate.item():.2e} | "
-                  f"ce {np.mean(running_ce):.4f} | ppl {np.exp(np.mean(running_ce)):.2f} | "
-                  f"aux {np.mean(running_aux):.4f} | {tok_per_sec:.0f} tok/s")
+                  f"ce {mean_ce:.4f} | ppl {np.exp(mean_ce):.2f} | "
+                  f"aux {mean_aux:.4f} | {tok_per_sec:.0f} tok/s")
+            append_log(args.out_dir, {
+                "type": "train", "step": step,
+                "lr": float(optimizer.learning_rate.item()),
+                "ce": mean_ce, "ppl": float(np.exp(mean_ce)),
+                "aux": mean_aux, "tok_per_sec": float(tok_per_sec),
+            })
             running_ce, running_aux = [], []
             start_time = time.time()
 
         if step % args.eval_every == 0:
             val_ce = evaluate(model, val_ds, args.batch_size)
             print(f"  [eval] step {step} | val_ce {val_ce:.4f} | val_ppl {np.exp(val_ce):.2f}")
+            append_log(args.out_dir, {
+                "type": "eval", "step": step,
+                "val_ce": val_ce, "val_ppl": float(np.exp(val_ce)),
+            })
+
+        if step % diag_every == 0:
+            _, _, _, diag_captures = model(diag_tokens, capture=True)
+            mx.eval(diag_captures)
+            per_layer_utilization = compute_layer_utilization(diag_captures, cfg.n_experts)
+            append_log(args.out_dir, {
+                "type": "diag", "step": step,
+                "per_layer_utilization": per_layer_utilization,
+            })
 
         if step % args.save_every == 0:
             ckpt_path = os.path.join(args.out_dir, f"step_{step}.safetensors")
