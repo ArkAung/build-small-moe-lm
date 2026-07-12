@@ -96,7 +96,7 @@ class Expert(nn.Module):
     """A single SwiGLU FFN expert."""
     def __init__(self, d_model, hidden_dim):
         super().__init__()
-        self.w1 = nn.Linear(d_model, hidden_dim, bias=False)   # gate
+        self.w1 = nn.Linear(d_model, hidden_dim, bias=False)   # gate Q: what does gate up down mean?
         self.w3 = nn.Linear(d_model, hidden_dim, bias=False)   # up
         self.w2 = nn.Linear(hidden_dim, d_model, bias=False)   # down
 
@@ -125,8 +125,8 @@ class MoELayer(nn.Module):
         B, T, D = x.shape
         x_flat = x.reshape(-1, D)                       # (N, D), N = B*T
 
-        router_logits = self.gate(x_flat)                # (N, n_experts)
-        router_probs = mx.softmax(router_logits, axis=-1)
+        router_logits = self.gate(x_flat)                # Q: is this gate solely responsible to route where the input should go? So this must mean that the gate which is just a linear layer should be learnt pretty well
+        router_probs = mx.softmax(router_logits, axis=-1) # Q: so we are just creating a probability distribution out of this?
 
         # top-k selection (mx has no fused topk-with-values op, so do it via argsort)
         sorted_idx = mx.argsort(-router_probs, axis=-1)              # (N, n_experts)
@@ -183,11 +183,11 @@ class Block(nn.Module):
         """Run attention + MoE with residual connections, returning updated
         hidden state, this block's aux loss, and the new KV cache entry."""
         attn_capture = {} if capture is not None else None
-        h, new_cache = self.attn(self.attn_norm(x), mask=mask, cache=cache, capture=attn_capture)
-        x = x + h
+        h, new_cache = self.attn(self.attn_norm(x), mask=mask, cache=cache, capture=attn_capture) # Q: why do we need to normalize with RMSnorm before we send to attention?
+        x = x + h # Q: is this residual connection?
 
         moe_capture = {} if capture is not None else None
-        moe_out, aux_loss = self.moe(self.moe_norm(x), capture=moe_capture)
+        moe_out, aux_loss = self.moe(self.moe_norm(x), capture=moe_capture) # Q: same here why do we normalize with RMSnorm before we send to MOE?
         x = x + moe_out
 
         if capture is not None:
@@ -241,8 +241,6 @@ class MoETransformer(nn.Module):
                 captures.append(block_capture)
 
         x = self.final_norm(x)
-        # Weight-tied output projection: reuse tok_emb.weight (vocab_size,
-        # d_model) as the LM head instead of a separate learned matrix.
         logits = x @ self.tok_emb.weight.T
         avg_aux_loss = total_aux_loss / len(self.blocks)
         return logits, avg_aux_loss, new_caches, captures
